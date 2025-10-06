@@ -10,6 +10,9 @@ within the PDTB dataset by reducing its sense level from a higher level to a low
 one. Usage is described in its docstring.
 * Other than that, you're welcome to add any functionalities in this module
 """
+import pickle
+from dataset import *
+data = PDTBDataset()
 
 def to_level(sense: str, level: int = 2) -> str:
     """converts a sense in string to a desired level
@@ -44,3 +47,36 @@ def to_level(sense: str, level: int = 2) -> str:
     s_split = sense.split(".")
     s_join = ".".join(s_split[:level])
     return s_join
+
+
+
+# PICKLE ME TIMBERS!!!
+def dataset_pickler():
+    with open("pickle_jar/dataset", 'wb') as f:
+        pickle.dump(data, f)
+
+def feature_pickler_glove():
+        features = data.featurize()
+        torch.save(features, "pickle_jar/features_glove")
+
+def feature_pickler_random():
+        features = data.featurize(encoding="random")
+        torch.save(features, "pickle_jar/features_random")
+
+# UNPICKLE ME NOW!!!
+def unpickle_dataset() -> PDTBDataset:
+    with open("pickle_jar/dataset", 'rb') as f:
+        return pickle.load(f)
+
+def unpickle_features(encoding="glove"):
+     if encoding=="glove":
+        return torch.load("pickle_jar/features_glove")
+     else: # encoding=="random"
+        return torch.load("pickle_jar/features_random")
+     
+
+
+if __name__ == '__main__':
+    dataset_pickler()
+    feature_pickler_glove()
+    feature_pickler_random()

@@ -16,3 +16,12 @@ __MACOSX
 # IDE
 .vscode
 .idea
+
+# Pickle Jar
+pickle_jar/
+
+# GloVe
+glove/
+
+# Test log
+test.output_log.txt

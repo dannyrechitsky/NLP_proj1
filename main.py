@@ -20,3 +20,9 @@ References:
 ---
 https://docs.pytorch.org/tutorials/beginner/basics/optimization_tutorial.html
 """
+
+from model import *
+
+if __name__ == "__main__":
+    lr = LogisticRegression(from_pickle="true", lr=0.05)
+    lr.train()
