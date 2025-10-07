@@ -10,6 +10,7 @@ using the subclass of ``torch.nn.Module``.
 import torch.nn as nn
 from dataset import *
 from utils import *
+from torchmetrics.classification import Accuracy, F1Score, Precision, Recall
 
 def weigh_classes(output:list[str], unique_classes:list) -> torch.Tensor:
     """
@@ -30,7 +31,7 @@ def weigh_classes(output:list[str], unique_classes:list) -> torch.Tensor:
 
     return torch.tensor(weights, dtype=torch.float32)
 
-def standardize(features):
+def standardize(features, set="training"):
     # Standardize the features before model training
     if features.numel() > 0:
         
@@ -42,7 +43,7 @@ def standardize(features):
         # 1e-6 prevents division by zero
         standardized_features = (features - mean) / (std + 1e-6) 
         
-        print("Features standardized: Mean ~0.0, Std Dev ~1.0")    
+        print(f"Features standardized: Mean ~0.0, Std Dev ~1.0 for {set} set")    
 
         return standardized_features
 
@@ -102,10 +103,6 @@ class LogisticRegression(nn.Module):
         # initialize cross-entropy loss criterion and optimizer
         class_weights_tensor = weigh_classes(self.data.senses, self.sorted_senses)
         self.criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
-        
-
-        
-
 
 
 
@@ -181,7 +178,77 @@ class LogisticRegression(nn.Module):
     
 class MLP(nn.Module):
     """Multilayer perceptron"""
-    
+    def __init__(self, input_dim, hidden_sizes, output_dim, 
+                 encoding="glove", from_pickle=False
+                 ):
+        super().__init__()
+        
+        # to print learning rate for debugging
+        self.data : PDTBDataset
+        self.features : torch.Tensor
+
+
+        self.encoding = encoding
+
+        # unpickle or featurize dataset/embedding
+        if from_pickle:
+            self.data = unpickle_dataset()
+            self.features = unpickle_features(encoding=encoding)
+        else: # build new dataset and features
+            self.data = PDTBDataset()
+            self.features = self.data.featurize(encoding=encoding)
+        
+        # Check for alignment between features and senses
+        if self.features.shape[0] != len(self.data.senses):
+            print(f"Warning: Number of features ({self.features.shape[0]})" 
+                  f"does not match number of senses ({len(self.data.senses)})." 
+                  f"Possible data misalignment.")
+        
+        # standardize features for mean=0 and std=1
+        self.features = standardize(self.features)
+
+        # create sense:index map
+        unique_senses = set(self.data.senses)
+        self.sorted_senses = sorted(unique_senses)
+        self.sense_map = {sense:i for i, sense in enumerate(self.sorted_senses)}
+        self.senses_tensor = torch.tensor(
+                [self.sense_map[sense] for sense in self.data.senses],
+                dtype=torch.long
+                )
+        # TODO: move to FeatureExtractor class
+        
+        # define layer dimensions
+        self.layer_dims = [input_dim] + hidden_sizes
+        
+        # store hidden layers in nn.ModuleList()
+        self.hidden_layers = nn.ModuleList()
+        # layers = [256, 128, 64, ]
+        for i in range(len(self.layer_dims) - 1):
+            self.hidden_layers.append(
+                nn.Linear(self.layer_dims[i], self.layer_dims[i+1])
+            )
+        
+        # output layer
+        self.output_layer = nn.Linear(hidden_sizes[-1], output_dim)
+
+        # activation function
+        self.relu = nn.ReLU()
+
+
+    def forward(self, x):
+        # loop through layers
+        for layer in self.hidden_layers:
+            x = self.relu(layer(x))
+        
+        logits = self.output_layer(x)
+        
+        return logits
+
+        
+        
+
+        
+
 
 
 class CNN(nn.Module):

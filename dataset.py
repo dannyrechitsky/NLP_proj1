@@ -154,6 +154,8 @@ class FeatureExtractor():
             # flatten each sentence by summing columns to 1d vector (1 x 300)
             features[i] = self.flatten_vectors(sentence_weights)
         
+            # TODO: implement concatenated word vectors instead of flattened vector
+            
         return features
 
       
@@ -204,11 +206,21 @@ class FeatureExtractor():
 
 class PDTBDataset(Dataset):
     """Dataset class for the PDTB dataset"""
-    def __init__(self):
+    def __init__(self, set="train"):
         super().__init__()
         self.sentences : list[str] = []
         self.senses : list[str] = []
-        with open("pdtb/train.json", 'r') as f:
+        path = ""
+        if set == "train":
+            path = "pdtb/train.json"
+        elif set == "validate":
+            path = "pdtb/dev.json"
+        elif set == "test":
+            path = "pdtb/test.json"
+        else:
+            raise FileNotFoundError("No such file found!")
+        
+        with open(path, 'r') as f:
             for line in f:
                 line = json.loads(line)
                 arg1 = line['Arg1']['RawText'].lower()

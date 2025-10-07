@@ -12,6 +12,7 @@ one. Usage is described in its docstring.
 """
 import pickle
 from dataset import *
+from model import *
 data = PDTBDataset()
 
 def to_level(sense: str, level: int = 2) -> str:
@@ -48,7 +49,25 @@ def to_level(sense: str, level: int = 2) -> str:
     s_join = ".".join(s_split[:level])
     return s_join
 
+def count_loss_epochs(prev_epoch_loss, avg_val_loss, inc_loss_epochs) -> int:
+    """
+    Checks if validation loss is increasing this epoch and increments
+    number of consecutive epochs of increasing loss; to be used as
+    an early stop condition for training
 
+    Returns:
+        int: number of consecutive epochs of increasing validation loss 
+    """
+
+    # if loss increasing, increment counter of num epochs
+    if avg_val_loss > prev_epoch_loss:
+        inc_loss_epochs += 1
+    # else, zero out counter
+    else:
+        inc_loss_epochs = 0
+    
+    return inc_loss_epochs
+    
 
 # PICKLE ME TIMBERS!!!
 def dataset_pickler():
@@ -56,12 +75,22 @@ def dataset_pickler():
         pickle.dump(data, f)
 
 def feature_pickler_glove():
-        features = data.featurize()
-        torch.save(features, "pickle_jar/features_glove")
+    features = data.featurize()
+    torch.save(features, "pickle_jar/features_glove")
 
 def feature_pickler_random():
-        features = data.featurize(encoding="random")
-        torch.save(features, "pickle_jar/features_random")
+    features = data.featurize(encoding="random")
+    torch.save(features, "pickle_jar/features_random")
+
+def feature_pickler_glove_val(val_set):
+    val_features = val_set.featurize()
+    val_features = standardize(val_features, set="validation")
+    torch.save(val_features, "pickle_jar/val_features_glove")
+
+def feature_pickler_glove_test(test_set):
+    test_features = test_set.featurize()
+    test_features = standardize(test_features, set="test")
+    torch.save(test_features, "pickle_jar/test_features_glove")    
 
 # UNPICKLE ME NOW!!!
 def unpickle_dataset() -> PDTBDataset:
@@ -69,14 +98,30 @@ def unpickle_dataset() -> PDTBDataset:
         return pickle.load(f)
 
 def unpickle_features(encoding="glove"):
-     if encoding=="glove":
+    if encoding=="glove":
         return torch.load("pickle_jar/features_glove")
-     else: # encoding=="random"
+    else: # encoding=="random"
         return torch.load("pickle_jar/features_random")
+
+def unpickle_features_val(encoding="glove"):
+    if encoding == "glove":
+        return torch.load("pickle_jar/val_features_glove")
+    else: # encoding == "random"
+        return torch.load("pickle_jar/val_features_random")
+
+def unpickle_features_test(encoding="glove"):
+    if encoding == "glove":
+        return torch.load("pickle_jar/test_features_glove")
+    else: # encoding == "random"
+        return torch.load("pickle_jar/test_features_random")
+
+        
      
 
 
 if __name__ == '__main__':
-    dataset_pickler()
-    feature_pickler_glove()
-    feature_pickler_random()
+    # dataset_pickler()
+    # feature_pickler_glove()
+    # feature_pickler_random()
+
+    feature_pickler_glove_test(PDTBDataset('test'))
