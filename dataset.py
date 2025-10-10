@@ -15,7 +15,9 @@ or class needed.
 from torch.utils.data import Dataset
 import torch
 import json
+from pathlib import Path 
 import numpy as np
+from utils import cache_glove_embeddings, load_glove_cache
 
 # This tells PyTorch it is safe to unpickle the nn.Embedding class
 torch.serialization.add_safe_globals([torch.nn.Embedding])
@@ -43,7 +45,8 @@ class FeatureExtractor():
     
     def map_vocab(self):
         vocab = {}
-        i = 0
+        vocab["<PAD>"] = 0
+        i = 1
         # add index for each token
         sentences = self.tokenize()
         for sentence in sentences:
@@ -51,7 +54,6 @@ class FeatureExtractor():
                 if token not in vocab:
                     vocab[token] = i
                     i += 1
-        # TODO: padding? UNK token?
 
         return sentences, vocab
     
@@ -81,7 +83,7 @@ class FeatureExtractor():
         return flat_vector    
 
 
-    def featurize(self, encoding='glove') -> torch.Tensor:
+    def featurize(self, encoding='glove', sentence_type='concat') -> torch.Tensor:
         """
         Featurize raw text data into multi-hot matrix.
 
@@ -93,6 +95,8 @@ class FeatureExtractor():
                 * **'glove'**: GloVe contextualized word embeddings.
                 * **'multihot'**: Multi-hot word embeddings.
                 * **'random'**: randomized word embeddings.
+            sentence_type (str): flat embedding averaged across words
+            or concatenated embedding 
 
         Returns:
             torch.Tensor: 
@@ -109,53 +113,113 @@ class FeatureExtractor():
         """
         sentences, vocab_map = self.map_vocab()
 
+        # ---------------- create vocab embeddings ------------ # 
         if encoding=="glove":
-        # 1. search GloVe text file 
-            vocab_embedding_list = torch.zeros(len(vocab_map), 300, dtype=torch.float32)
+            print(f'FEATURIZING: encoding: glove')
+            
+            # initialize vocab embedding as random distribution 
+            vocab_embedding_list = torch.randn(len(vocab_map), 300, dtype=torch.float32)
+            # set padding token embeddings to zeros
+            if len(vocab_map) > 0:
+                vocab_embedding_list[0].zero_()
+            
+            # initialize list of word indices
             word_indices = []
-            with open('glove/dolma_300_2024_1.2M.100_combined.txt', 'r') as file:
-                for line in file:
-                    # 2. find embeddings in GloVe text file pertaining to vocab
-                    #    populate tensor with GloVe embeddings (v x 300)                
-                    word_and_embeddings = line.strip().split()
-                    word = word_and_embeddings[0]
-                    word_embeddings = [float(value) for value in word_and_embeddings[1:]]
-                    if word in vocab_map:
-                        if len(word_embeddings) != 300:
-                            print(f"Error: word_embeddings has length {len(word_embeddings)}, expected 300.")
-                        i = vocab_map[word]
-                        vocab_embedding_list[i] = torch.tensor(word_embeddings, dtype=torch.float32)
 
-            # TODO: delete print debug
-            # print(f'vocab_embedding_list shape: {vocab_embedding_list.shape}/n')
-            # print(f'vocab_embedding_list num rows: {len(vocab_embedding_list)}')
-            # for i in range(len(vocab_embedding_list)):
-            #     print(f'row {i} length:{len(vocab_embedding_list[i])}')
+            # initialize glove cache dictionary
+            glove_cache = {}
 
-            # vocab_embedding_tensor = torch.tensor(vocab_embedding_list, dtype=torch.float32)
-            vocab_embedding = torch.nn.Embedding.from_pretrained(vocab_embedding_list)
+            # load embeddings from cache OR create embeddings from txt
+            CACHE_DIR = Path("glove/glove_cache.pt")
+            if CACHE_DIR.exists():
+                print("Loading GloVe dictionary cache!")
+                glove_cache = load_glove_cache()
+
+            else:
+                print("GloVe dictionary cache does not exist, " \
+                "extracting embeddings from .txt file")
+                
+                # extract from GloVe text file 
+                # TODO: make sure to push glove cache to github
+                glove_cache = cache_glove_embeddings()
+
+            # add word embeddings to vocab embeddings
+            for word_embeddings in glove_cache:
+                if glove_cache[word_embeddings] in vocab_map:
+                    if len(word_embeddings) != 300:
+                        print(f"Error: word_embeddings has length {len(word_embeddings)}, expected 300.")
+                        continue # skip corrupted vectors
+                    idx = vocab_map[word]
+                    vocab_embedding_list[idx].copy_(word_embeddings)
+
+            vocab_embedding = torch.nn.Embedding.from_pretrained(vocab_embedding_list, padding_idx=0)
 
         else: # encoding="random"
-            vocab_embedding = torch.nn.Embedding(len(vocab_map), 300)
+            print(f'FEATURIZING: encoding: random')
+            vocab_embedding = torch.nn.Embedding(len(vocab_map), 300, padding_idx=0)
 
-        # ---------------- #
+        # ---------------- featurize embeddings ------------- #
                         
-        # initialize input weights (s x 300)
-        features = torch.zeros(len(sentences), 300)
+        if sentence_type == "flat":
+            print(f'FEATURIZING: sentence_type: flat')
+            # initialize input weights (s x 300)
+            features = torch.zeros(len(sentences), 300)
 
-        # 3. create sentence embedding (w x 300)
-        for i in range(len(sentences)): 
-            word_indices = []
-            for word in sentences[i]:
-                word_indices.append(vocab_map[word])
-            sentence_weights = vocab_embedding(torch.tensor(
-                                        word_indices, dtype=torch.long))
-            
-            # flatten each sentence by summing columns to 1d vector (1 x 300)
-            features[i] = self.flatten_vectors(sentence_weights)
+            # 3. create sentence embedding (w x 300)
+            for i in range(len(sentences)): 
+                word_indices = []
+                for word in sentences[i]:
+                    word_indices.append(vocab_map[word])
+                sentence_weights = vocab_embedding(torch.tensor(
+                                            word_indices, dtype=torch.long))
+                
+                # flatten each sentence by summing columns to 1d vector (1 x 300)
+                features[i] = self.flatten_vectors(sentence_weights)
         
-            # TODO: implement concatenated word vectors instead of flattened vector
+        # TODO: implement concatenated word vectors instead of flattened vector
+        elif sentence_type == "concat":
+            print(f'FEATURIZING: sentence_type: concat')
             
+            # cap max sentence,
+            # otherwise memory issues
+            MAX_W = 50 
+
+            # initialize input features (s x 300*MAX_W)
+            features = torch.randn(len(sentences), 300*MAX_W)
+
+            # create sententence embedding (1 x 300*max(w))
+            for i in range(len(sentences)): 
+                
+                # populate sentence indices   
+                word_indices = []
+                # only populate first MAX_W indices
+                if len(sentences[i]) <= MAX_W:
+                    # append real word indices
+                    for j in range(len(sentences[i])):
+                        word_indices.append(vocab_map[sentences[i][j]])
+                    
+                    # pad the rest of the sentence with vocab_map["<PAD>"]
+                    rem_words = MAX_W - len(word_indices)
+                    padding = [vocab_map["<PAD>"] for k in range(rem_words)]
+                    word_indices.extend(padding)
+                else: # sentence over MAX_W tokens, append only 1st MAX_W tokens
+                    for j in range(MAX_W):
+                        word_indices.append(vocab_map[sentences[i][j]])
+
+                # make sure exactly MAX_W word indices in sentence
+                if len(word_indices) != MAX_W:
+                    print(f'padded sentence length: {len(word_indices)}')
+                    print(f'but it should be:       {MAX_W}')
+                    raise ValueError(f'sentence {i} is not correctly padded!')
+                
+                # add sentence to features tensor
+                sentence_tensor = vocab_embedding(torch.tensor(
+                                    word_indices, dtype=torch.long))
+                features[i] = sentence_tensor.flatten()
+
+        else:
+            raise ValueError("sentence_type must be 'flat' or 'concat'!")
+
         return features
 
       
@@ -206,10 +270,11 @@ class FeatureExtractor():
 
 class PDTBDataset(Dataset):
     """Dataset class for the PDTB dataset"""
-    def __init__(self, set="train"):
+    def __init__(self, set="train", sentence_type="concat", encoding="glove"):
         super().__init__()
         self.sentences : list[str] = []
         self.senses : list[str] = []
+        self.features : torch.Tensor
         path = ""
         if set == "train":
             path = "pdtb/train.json"
@@ -231,9 +296,11 @@ class PDTBDataset(Dataset):
                 self.senses.append(sense[0])
         
 
-    def featurize(self, encoding='glove'):
+    def featurize(self, encoding='glove', sentence_type="concat"):
         extractor = FeatureExtractor(self.sentences, self.senses)
-        features = extractor.featurize()
+        features = extractor.featurize(encoding=encoding, 
+                                    sentence_type=sentence_type)
+        self.features = features
         return features
 
     def __len__(self):

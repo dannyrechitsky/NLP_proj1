@@ -11,9 +11,8 @@ one. Usage is described in its docstring.
 * Other than that, you're welcome to add any functionalities in this module
 """
 import pickle
-from dataset import *
-from model import *
-data = PDTBDataset()
+import numpy as np
+import torch
 
 def to_level(sense: str, level: int = 2) -> str:
     """converts a sense in string to a desired level
@@ -60,7 +59,7 @@ def count_loss_epochs(prev_epoch_loss, avg_val_loss, inc_loss_epochs) -> int:
     """
 
     # if loss increasing, increment counter of num epochs
-    if avg_val_loss > prev_epoch_loss:
+    if avg_val_loss - prev_epoch_loss > 0.01:
         inc_loss_epochs += 1
     # else, zero out counter
     else:
@@ -68,60 +67,188 @@ def count_loss_epochs(prev_epoch_loss, avg_val_loss, inc_loss_epochs) -> int:
     
     return inc_loss_epochs
     
+def cache_glove_embeddings():
+    glove_cache = {}
+    with open('glove/dolma_300_2024_1.2M.100_combined.txt', 'r', encoding="utf-8") as file:
+        for line in file:
+            # 2. find embeddings in GloVe text file pertaining to vocab
+            #    populate tensor with GloVe embeddings (v x 300)                
+            word_and_embeddings = line.strip().split()
+            if len(word_and_embeddings) != 301:
+                raise ValueError(f'length of word + embedding = {len(word_and_embeddings)}'
+                                 f', but expected 301')
+            
+            print(f'length of word + embedding {len(word_and_embeddings)}')
+            word = word_and_embeddings[0]
+
+            # safely convert embedding strings to np floats to torch tensor
+            embedding = word_and_embeddings[1:]
+            try:
+                # safe conversion strings to floats
+                word_embeddings_array = np.array(
+                    word_and_embeddings[1:], dtype=np.float32)
+            except ValueError:
+                # ignore corrupted lines, treat as OOV
+                continue
+            word_embeddings_tensor = torch.from_numpy(word_embeddings_array)
+            
+            # add word embeddings tensor to dictionary cache
+            glove_cache[word] = word_embeddings_tensor
+    
+    # pickle glove_cache in a .pt file
+    torch.save(glove_cache, "glove/glove_cache.pt")
+
+    return glove_cache
+
+
+
+def load_glove_cache():
+
+    return torch.load("glove/glove_cache.pt")
+
+def standardize(features, mean=None, std=None,):
+    # Standardize the features before model training
+    if features.numel() > 0:
+        if mean is None or std is None:
+            # 1. For training set, calculate Mean and Std Dev across the sentences
+            mean = features.mean(dim=0, keepdim=True)
+            std = features.std(dim=0, keepdim=True)
+        
+        # 2. Apply the Standard Scaling formula: (X - mean) / std
+        # 1e-6 prevents division by zero
+        standardized_features = (features - mean) / (std + 1e-6) 
+           
+
+        # return mean and std for standardizing val set and test set
+        return standardized_features, mean, std
+
+    return features, None, None
 
 # PICKLE ME TIMBERS!!!
-def dataset_pickler():
+def dataset_pickler(data):
     with open("pickle_jar/dataset", 'wb') as f:
         pickle.dump(data, f)
 
-def feature_pickler_glove():
-    features = data.featurize()
-    torch.save(features, "pickle_jar/features_glove")
+def feature_pickler_glove(data, sentence_type="concat"):
+    if sentence_type=="concat":
+        features = data.features
+        torch.save(features, "pickle_jar/features_concat_glove")  
+    else:
+        features = data.features
+        torch.save(features, "pickle_jar/features_glove")
 
-def feature_pickler_random():
-    features = data.featurize(encoding="random")
-    torch.save(features, "pickle_jar/features_random")
+def feature_pickler_random(data, sentence_type="concat"):
+    if sentence_type=="concat":
+        features = data.features
+        torch.save(features, "pickle_jar/features_concat_random")  
+    else:
+        features = data.features
+        torch.save(features, "pickle_jar/features_random")
 
-def feature_pickler_glove_val(val_set):
-    val_features = val_set.featurize()
-    val_features = standardize(val_features, set="validation")
-    torch.save(val_features, "pickle_jar/val_features_glove")
+def feature_pickler_val(val_set, mean, std, 
+                        sentence_type="concat", encoding="glove"):
+    if encoding=="glove":
+        if sentence_type=="concat":
+            val_features = val_set.featurize()
+            val_features, _, _ = standardize(val_features, mean, std)
+            torch.save(val_features, "pickle_jar/val_features_concat_glove")  
+        else:
+            val_features = val_set.featurize()
+            val_features, _, _ = standardize(val_features, mean, std)
+            torch.save(val_features, "pickle_jar/val_features_glove")
+    else: # encoding=="random"
+        if sentence_type=="concat":
+            val_features = val_set.featurize(encoding="random")
+            val_features, _, _= standardize(val_features, mean, std)
+            torch.save(val_features, "pickle_jar/val_features_concat_random")  
+        else:
+            val_features = val_set.featurize(encoding="random")
+            val_features, _, _ = standardize(val_features, mean, std)
+            torch.save(val_features, "pickle_jar/val_features_random")    
 
-def feature_pickler_glove_test(test_set):
-    test_features = test_set.featurize()
-    test_features = standardize(test_features, set="test")
-    torch.save(test_features, "pickle_jar/test_features_glove")    
+def feature_pickler_test(test_set, mean, std, 
+                        sentence_type="concat", encoding="glove"):
+    if encoding=="glove":
+        if sentence_type=="concat":
+            test_features = test_set.featurize()
+            test_features, _, _ = standardize(test_features, mean, std)
+            torch.save(test_features, "pickle_jar/test_features_concat_glove") 
+        else:
+            test_features = test_set.featurize()
+            test_features, _, _ = standardize(test_features, mean, std)
+            torch.save(test_features, "pickle_jar/test_features_glove")
+    else: # encoding == "random"
+        if sentence_type=="concat":
+            test_features = test_set.featurize(encoding="random")
+            test_features, _, _ = standardize(test_features, mean, std)
+            torch.save(test_features, "pickle_jar/test_features_concat_rando") 
+        else:
+            test_features = test_set.featurize(encoding="random")
+            test_features, _, _ = standardize(test_features, mean, std)
+            torch.save(test_features, "pickle_jar/test_features_random")    
 
 # UNPICKLE ME NOW!!!
-def unpickle_dataset() -> PDTBDataset:
+def unpickle_dataset():
     with open("pickle_jar/dataset", 'rb') as f:
         return pickle.load(f)
 
-def unpickle_features(encoding="glove"):
-    if encoding=="glove":
-        return torch.load("pickle_jar/features_glove")
-    else: # encoding=="random"
-        return torch.load("pickle_jar/features_random")
+def unpickle_features(encoding="glove", sentence_type="flat"):
+    if sentence_type == "flat":
+        if encoding=="glove":
+            return torch.load("pickle_jar/features_glove")
+        else: # encoding=="random"
+            return torch.load("pickle_jar/features_random")
+    elif sentence_type == "concat":
+        if encoding=="glove":
+            return torch.load("pickle_jar/features_concat_glove")
+        else: # encoding=="random"
+            return torch.load("pickle_jar/features_concat_random")
+    else:
+        raise ValueError(f'sentence_type={sentence_type} is not valid \n'
+                         f'It must be "flat" or "concat"')     
 
-def unpickle_features_val(encoding="glove"):
-    if encoding == "glove":
-        return torch.load("pickle_jar/val_features_glove")
-    else: # encoding == "random"
-        return torch.load("pickle_jar/val_features_random")
+def unpickle_features_val(encoding="glove", sentence_type="flat"):
+    if sentence_type == "flat":
+        if encoding == "glove":
+            return torch.load("pickle_jar/val_features_glove")
+        else: # encoding == "random"
+            return torch.load("pickle_jar/val_features_random")
+    elif sentence_type == "concat":
+        if encoding=="glove":
+            return torch.load("pickle_jar/val_features_concat_glove")
+        else: # encoding=="random"
+            return torch.load("pickle_jar/val_features_concat_random")
+    else:
+        raise ValueError(f'sentence_type={sentence_type} is not valid \n'
+                         f'It must be "flat" or "concat"')
 
-def unpickle_features_test(encoding="glove"):
-    if encoding == "glove":
-        return torch.load("pickle_jar/test_features_glove")
-    else: # encoding == "random"
-        return torch.load("pickle_jar/test_features_random")
-
+def unpickle_features_test(encoding="glove", sentence_type="flat"):
+    if sentence_type == "flat":
+        if encoding == "glove":
+            return torch.load("pickle_jar/test_features_glove")
+        else: # encoding == "random"
+            return torch.load("pickle_jar/test_features_random")
+    elif sentence_type == "concat":
+        if encoding=="glove":
+            return torch.load("pickle_jar/test_features_concat_glove")
+        else: # encoding=="random"
+            return torch.load("pickle_jar/test_features_concat_random")
+    else:
+        raise ValueError(f'sentence_type={sentence_type} is not valid \n'
+                         f'It must be "flat" or "concat"')
         
      
 
 
-if __name__ == '__main__':
+# if __name__ == '__main__':
     # dataset_pickler()
-    # feature_pickler_glove()
-    # feature_pickler_random()
+    # feature_pickler_random(sentence_type="flat")
+    # feature_pickler_glove(sentence_type="flat")
 
-    feature_pickler_glove_test(PDTBDataset('test'))
+    # model1 = MLP([64], 21, from_pickle=False, 
+    #             sentence_type="concat", encoding="glove")
+
+    # feature_pickler_val(PDTBDataset('validate'), model1.mean, model1.std,
+    #                     encoding="glove", sentence_type="concat")
+    # feature_pickler_test(PDTBDataset('test'), model1.mean, model1.std,
+    #                     encoding="glove", sentence_type="concat")

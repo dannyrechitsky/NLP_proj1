@@ -8,7 +8,9 @@ using the subclass of ``torch.nn.Module``.
 """
 
 import torch.nn as nn
+from dataset import PDTBDataset
 from dataset import *
+import utils
 from utils import *
 from torchmetrics.classification import Accuracy, F1Score, Precision, Recall
 
@@ -31,28 +33,28 @@ def weigh_classes(output:list[str], unique_classes:list) -> torch.Tensor:
 
     return torch.tensor(weights, dtype=torch.float32)
 
-def standardize(features, set="training"):
+def standardize(features, mean=None, std=None,):
     # Standardize the features before model training
     if features.numel() > 0:
-        
-        # 1. Calculate Mean and Std Dev across the sentences
-        mean = features.mean(dim=0, keepdim=True)
-        std = features.std(dim=0, keepdim=True)
+        if mean is None or std is None:
+            # 1. For training set, calculate Mean and Std Dev across the sentences
+            mean = features.mean(dim=0, keepdim=True)
+            std = features.std(dim=0, keepdim=True)
         
         # 2. Apply the Standard Scaling formula: (X - mean) / std
         # 1e-6 prevents division by zero
         standardized_features = (features - mean) / (std + 1e-6) 
-        
-        print(f"Features standardized: Mean ~0.0, Std Dev ~1.0 for {set} set")    
+           
 
-        return standardized_features
+        # return mean and std for standardizing val set and test set
+        return standardized_features, mean, std
 
-    return features
+    return features, None, None
 
 
 class LogisticRegression(nn.Module):
     """Logistic regression model"""
-    def __init__(self, encoding="glove", from_pickle=False, lr=0.01):
+    def __init__(self, encoding="glove", sentence_type="concat", from_pickle=False, lr=0.01):
         super().__init__()
         
         # to print learning rate for debugging
@@ -69,7 +71,7 @@ class LogisticRegression(nn.Module):
             self.data = unpickle_dataset()
             self.features = unpickle_features(encoding=encoding)
         else: # build new dataset and features
-            self.data = PDTBDataset()
+            self.data = PDTBDataset(encoding=encoding, sentence_type=sentence_type)
             self.features = self.data.featurize(encoding=encoding)
         
         # Check for alignment between features and senses
@@ -79,7 +81,7 @@ class LogisticRegression(nn.Module):
                   f"Possible data misalignment.")
         
         # standardize features for mean=0 and std=1
-        self.features = standardize(self.features)
+        self.features, _, _ = standardize(self.features)
 
 
         # initialize weights matrix
@@ -178,25 +180,48 @@ class LogisticRegression(nn.Module):
     
 class MLP(nn.Module):
     """Multilayer perceptron"""
-    def __init__(self, input_dim, hidden_sizes, output_dim, 
-                 encoding="glove", from_pickle=False
-                 ):
+    def __init__(self, hidden_sizes, output_dim, 
+                 encoding="glove", sentence_type="concat", from_pickle=False,
+                 dropout=0.0):
         super().__init__()
         
         # to print learning rate for debugging
         self.data : PDTBDataset
         self.features : torch.Tensor
 
-
         self.encoding = encoding
+        self.sentence_type = sentence_type
+
+
 
         # unpickle or featurize dataset/embedding
         if from_pickle:
-            self.data = unpickle_dataset()
-            self.features = unpickle_features(encoding=encoding)
+            self.data = utils.unpickle_dataset()
+            self.features = utils.unpickle_features(
+                encoding=encoding,
+                sentence_type=sentence_type)
         else: # build new dataset and features
-            self.data = PDTBDataset()
-            self.features = self.data.featurize(encoding=encoding)
+            self.data = PDTBDataset(set="train", 
+                                    sentence_type=sentence_type, 
+                                    encoding=encoding
+                                    )
+            # featurize data
+            self.data.featurize(
+                encoding=encoding,
+                sentence_type=sentence_type
+                )
+            # point model features to data features (save space)
+            self.features = self.data.features
+
+            #TODO: remove the old code below: I featurized twice! 
+            #     encoding=encoding,
+            #     sentence_type=sentence_type)
+            # pickle features
+            if self.encoding == "glove":
+                utils.feature_pickler_glove(self.data, sentence_type=self.sentence_type)
+            elif self.encoding == "random":
+                utils.feature_pickler_random(self.data, sentence_type=sentence_type)
+            
         
         # Check for alignment between features and senses
         if self.features.shape[0] != len(self.data.senses):
@@ -205,7 +230,18 @@ class MLP(nn.Module):
                   f"Possible data misalignment.")
         
         # standardize features for mean=0 and std=1
-        self.features = standardize(self.features)
+        self.features, self.mean, self.std = standardize(self.features)
+        
+        if not from_pickle:
+            print("Featurizing validation set...")
+            utils.feature_pickler_val(PDTBDataset('validate'), self.mean, self.std,
+                            encoding=encoding, sentence_type=sentence_type)
+            print("Featurizing test set...")
+            utils.feature_pickler_test(PDTBDataset('test'), self.mean, self.std,
+                            encoding=encoding, sentence_type=sentence_type)
+        
+        print(f'\n\n\nMLP sentence type:    {self.sentence_type}')
+        print(f'input features shape: {self.features.shape}\n\n\n')
 
         # create sense:index map
         unique_senses = set(self.data.senses)
@@ -218,6 +254,7 @@ class MLP(nn.Module):
         # TODO: move to FeatureExtractor class
         
         # define layer dimensions
+        input_dim = self.features.shape[1]
         self.layer_dims = [input_dim] + hidden_sizes
         
         # store hidden layers in nn.ModuleList()
@@ -234,23 +271,138 @@ class MLP(nn.Module):
         # activation function
         self.relu = nn.ReLU()
 
+        # dropout regularization
+        self.dropout = nn.Dropout(p=dropout)
+
 
     def forward(self, x):
         # loop through layers
         for layer in self.hidden_layers:
             x = self.relu(layer(x))
-        
+            
+            # apply dropout
+            x = self.dropout(x)
+
         logits = self.output_layer(x)
         
         return logits
 
-        
-        
-
-        
-
-
 
 class CNN(nn.Module):
     """CNN model"""
-    NotImplemented
+    def __init__(self, 
+                batch_size, 
+                embed_dim, 
+                max_sent_len,
+                encoding="glove",
+                sentence_type="concat",
+                from_pickle=False
+                ):
+        super().__init__()
+        
+        NUM_FILTERS = 100
+        NUM_CLASSES = 21
+
+        # to print learning rate for debugging
+        self.data : PDTBDataset
+        self.features : torch.Tensor
+
+        self.encoding = encoding
+        self.sentence_type = sentence_type
+
+
+
+        # unpickle or featurize dataset/embedding
+        if from_pickle:
+            self.data = utils.unpickle_dataset()
+            self.features = utils.unpickle_features(
+                encoding=encoding,
+                sentence_type=sentence_type)
+        else: # build new dataset and features
+            self.data = PDTBDataset(set="train", 
+                                    sentence_type=sentence_type, 
+                                    encoding=encoding
+                                    )
+            # featurize data
+            self.data.featurize(
+                encoding=encoding,
+                sentence_type=sentence_type
+                )
+            # point model features to data features (save space)
+            self.features = self.data.features
+
+            #TODO: remove the old code below: I featurized twice! 
+            #     encoding=encoding,
+            #     sentence_type=sentence_type)
+            # pickle features
+            if self.encoding == "glove":
+                utils.feature_pickler_glove(self.data, sentence_type=self.sentence_type)
+            elif self.encoding == "random":
+                utils.feature_pickler_random(self.data, sentence_type=sentence_type)
+            
+        
+        # Check for alignment between features and senses
+        if self.features.shape[0] != len(self.data.senses):
+            print(f"Warning: Number of features ({self.features.shape[0]})" 
+                  f"does not match number of senses ({len(self.data.senses)})." 
+                  f"Possible data misalignment.")
+        
+        # standardize features for mean=0 and std=1
+        self.features, self.mean, self.std = standardize(self.features)
+        
+        if not from_pickle:
+            print("Featurizing validation set...")
+            utils.feature_pickler_val(PDTBDataset('validate'), self.mean, self.std,
+                            encoding=encoding, sentence_type=sentence_type)
+            print("Featurizing test set...")
+            utils.feature_pickler_test(PDTBDataset('test'), self.mean, self.std,
+                            encoding=encoding, sentence_type=sentence_type)
+        
+        print(f'\n\n\nMLP sentence type:    {self.sentence_type}')
+        print(f'input features shape: {self.features.shape}\n\n\n')
+
+        # TODO: move to FeatureExtractor class
+        # create sense:index map
+        unique_senses = set(self.data.senses)
+        self.sorted_senses = sorted(unique_senses)
+        self.sense_map = {sense:i for i, sense in enumerate(self.sorted_senses)}
+        self.senses_tensor = torch.tensor(
+                [self.sense_map[sense] for sense in self.data.senses],
+                dtype=torch.long
+                )
+        
+        # Initialize convolution layer
+        self.conv = nn.Conv1d(in_channels=embed_dim,
+                            out_channels=NUM_FILTERS,
+                            kernel_size=3
+        )
+        
+        # Initialize global pooling 
+        L_out = max_sent_len - 3 + 1 #L_out = 48 at max_sent_len 50 
+        self.pool = nn.MaxPool1d(kernel_size=L_out)
+
+        # Initialize classification layer
+        self.fc = nn.Linear(in_features=NUM_FILTERS,
+                            out_features=NUM_CLASSES
+        )                         
+
+        # Initialize activation function
+        self.relu = nn.ReLU()
+
+        # Perform forward pass
+        def forward(self, x):
+            # permute to swap embedding dimension and max sentence length
+            x = x.permute(0, 2, 1)
+
+            # convolve and activate
+            x = self.relu(self.conv1(x))
+
+            # apply global max pooling: reduce length dim to 1
+            # to get a fixed-size feature verctor for each instance
+            x = self.pool(x).squeeze(-1)
+
+            # perform classification
+            logits = self.fc(x)
+            return logits
+        
+        
