@@ -1,0 +1,71 @@
+Features standardized: Mean ~0.0, Std Dev ~1.0 for training set
+MLP model initialized with 8 hidden layers
+Hidden sizes: [256, 128, 64, 32, 64, 128, 256, 256]
+Embedding type: random
+Sentence structure: flat
+------------------
+EPOCH ------------- 0
+TRN: average loss = 2.710022650853965
+VAL: average loss = 2.6265358785400816
+--Loss incr epochs: 0
+EPOCH ------------- 1
+TRN: average loss = 2.6245520615112365
+VAL: average loss = 2.59400621629359
+--Loss incr epochs: 0
+EPOCH ------------- 2
+TRN: average loss = 2.5791425255159455
+VAL: average loss = 2.590305952640629
+--Loss incr epochs: 0
+EPOCH ------------- 3
+TRN: average loss = 2.544859812170638
+VAL: average loss = 2.58453514316952
+--Loss incr epochs: 0
+EPOCH ------------- 4
+TRN: average loss = 2.5146032614112177
+VAL: average loss = 2.5780843864908456
+--Loss incr epochs: 0
+EPOCH ------------- 5
+TRN: average loss = 2.476520524458052
+VAL: average loss = 2.571730640937359
+--Loss incr epochs: 0
+EPOCH ------------- 6
+TRN: average loss = 2.438248806533239
+VAL: average loss = 2.639991409599283
+--Loss incr epochs: 1
+EPOCH ------------- 7
+TRN: average loss = 2.400950211175708
+VAL: average loss = 2.6088127100368066
+--Loss incr epochs: 0
+EPOCH ------------- 8
+TRN: average loss = 2.3608145748174776
+VAL: average loss = 2.5759402204688877
+--Loss incr epochs: 0
+EPOCH ------------- 9
+TRN: average loss = 2.3173001689186874
+VAL: average loss = 2.65301744054619
+--Loss incr epochs: 1
+EPOCH ------------- 10
+TRN: average loss = 2.292355452137864
+VAL: average loss = 2.643455399112117
+--Loss incr epochs: 0
+EPOCH ------------- 11
+TRN: average loss = 2.242816991594982
+VAL: average loss = 2.681975955750617
+--Loss incr epochs: 1
+EPOCH ------------- 12
+TRN: average loss = 2.1997666622611516
+VAL: average loss = 2.694520450900192
+--Loss incr epochs: 2
+EPOCH ------------- 13
+TRN: average loss = 2.167323725568327
+VAL: average loss = 2.7628218078347633
+EARLY TERMINATION: validation loss increasing for 3 consecutive epochs
+----END OF TRAINING---
+----Epochs trained: 13
+
+
+
+---TEST RESULTS---
+
+Accuracy: 0.15053433179855347* macroaveraged
+F1 Score: 0.07461391389369965* macroaveraged

@@ -59,7 +59,7 @@ def count_loss_epochs(prev_epoch_loss, avg_val_loss, inc_loss_epochs) -> int:
     """
 
     # if loss increasing, increment counter of num epochs
-    if avg_val_loss - prev_epoch_loss > 0.01:
+    if avg_val_loss - prev_epoch_loss > 0.05:
         inc_loss_epochs += 1
     # else, zero out counter
     else:
@@ -145,45 +145,45 @@ def feature_pickler_random(data, sentence_type="concat"):
         features = data.features
         torch.save(features, "pickle_jar/features_random")
 
-def feature_pickler_val(val_set, mean, std, 
+def feature_pickler_val(cli_args, val_set, mean, std, 
                         sentence_type="concat", encoding="glove"):
     if encoding=="glove":
         if sentence_type=="concat":
-            val_features = val_set.featurize()
+            val_features = val_set.featurize(cli_args)
             val_features, _, _ = standardize(val_features, mean, std)
             torch.save(val_features, "pickle_jar/val_features_concat_glove")  
         else:
-            val_features = val_set.featurize()
+            val_features = val_set.featurize(cli_args)
             val_features, _, _ = standardize(val_features, mean, std)
             torch.save(val_features, "pickle_jar/val_features_glove")
     else: # encoding=="random"
         if sentence_type=="concat":
-            val_features = val_set.featurize(encoding="random")
+            val_features = val_set.featurize(cli_args)
             val_features, _, _= standardize(val_features, mean, std)
             torch.save(val_features, "pickle_jar/val_features_concat_random")  
         else:
-            val_features = val_set.featurize(encoding="random")
+            val_features = val_set.featurize(cli_args)
             val_features, _, _ = standardize(val_features, mean, std)
             torch.save(val_features, "pickle_jar/val_features_random")    
 
-def feature_pickler_test(test_set, mean, std, 
+def feature_pickler_test(cli_args, test_set, mean, std, 
                         sentence_type="concat", encoding="glove"):
     if encoding=="glove":
         if sentence_type=="concat":
-            test_features = test_set.featurize()
+            test_features = test_set.featurize(cli_args)
             test_features, _, _ = standardize(test_features, mean, std)
             torch.save(test_features, "pickle_jar/test_features_concat_glove") 
         else:
-            test_features = test_set.featurize()
+            test_features = test_set.featurize(cli_args)
             test_features, _, _ = standardize(test_features, mean, std)
             torch.save(test_features, "pickle_jar/test_features_glove")
     else: # encoding == "random"
         if sentence_type=="concat":
-            test_features = test_set.featurize(encoding="random")
+            test_features = test_set.featurize(cli_args)
             test_features, _, _ = standardize(test_features, mean, std)
             torch.save(test_features, "pickle_jar/test_features_concat_rando") 
         else:
-            test_features = test_set.featurize(encoding="random")
+            test_features = test_set.featurize(cli_args)
             test_features, _, _ = standardize(test_features, mean, std)
             torch.save(test_features, "pickle_jar/test_features_random")    
 

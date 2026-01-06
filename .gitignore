@@ -25,3 +25,11 @@ glove/
 
 # Test log
 test.output_log.txt
+
+# misc
+pdtb (2).zip:Zone.Identifier
+pdtb/
+.ipynb_checkpoints/
+explore*
+NLP_proj1/
+submit.sh

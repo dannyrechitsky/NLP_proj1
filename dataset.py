@@ -17,12 +17,17 @@ import torch
 import json
 from pathlib import Path 
 import numpy as np
-from utils import cache_glove_embeddings, load_glove_cache
+from utils import cache_glove_embeddings, load_glove_cache, to_level
+
+import argparse
 
 # This tells PyTorch it is safe to unpickle the nn.Embedding class
 torch.serialization.add_safe_globals([torch.nn.Embedding])
 
-class FeatureExtractor():
+
+
+
+class FeatureExtractor:
 
 
 #        FEATURE SETS
@@ -34,7 +39,7 @@ class FeatureExtractor():
 #        ignore connectives inside args
 #        ignore stop words
 
-# CONNECTIVES ONLY
+
     def __init__(self, instances, outputs):
         self.instances = instances
         self.outputs = outputs
@@ -43,17 +48,29 @@ class FeatureExtractor():
         return [instance.split() for instance in self.instances]
 
     
-    def map_vocab(self):
-        vocab = {}
-        vocab["<PAD>"] = 0
-        i = 1
-        # add index for each token
+    def map_vocab(self, vocab_cap=None):
+        # Count all word occurrences
+        word_counts = {}
         sentences = self.tokenize()
         for sentence in sentences:
             for token in sentence:
-                if token not in vocab:
-                    vocab[token] = i
-                    i += 1
+                word_counts[token] = word_counts.get(token, 0) + 1
+        
+        # Sort by frequency and take the top N if vocab_cap
+        sorted_words = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
+
+        # Apply cap only if vocab_cap is specified
+        if vocab_cap is not None:
+            print(f"Capping vocabulary at top {vocab_cap} most frequent words.")
+            top_words = sorted_words[:vocab_cap]
+        else:
+            print(f"Using full vocabulary (size: {len(sorted_words)}).")
+            top_words = sorted_words
+
+        # 3. Build the actual map
+        vocab = {"<PAD>": 0, "<UNK>": 1} # Added an Unknown token
+        for i, (word, count) in enumerate(top_words, start=2):
+            vocab[word] = i
 
         return sentences, vocab
     
@@ -83,7 +100,7 @@ class FeatureExtractor():
         return flat_vector    
 
 
-    def featurize(self, encoding='glove', sentence_type='concat') -> torch.Tensor:
+    def featurize(self, cli_args, sentence_type='concat', external_vocab=None) -> torch.Tensor:
         """
         Featurize raw text data into multi-hot matrix.
 
@@ -93,7 +110,7 @@ class FeatureExtractor():
             encoding (str): the kind of features.
                 Options include:
                 * **'glove'**: GloVe contextualized word embeddings.
-                * **'multihot'**: Multi-hot word embeddings.
+                * **'sparse'**: Multi-hot word embeddings.
                 * **'random'**: randomized word embeddings.
             sentence_type (str): flat embedding averaged across words
             or concatenated embedding 
@@ -111,10 +128,44 @@ class FeatureExtractor():
                     n: number of instances in text_data.
                     d: fixed length of word embedding = 300.
         """
-        sentences, vocab_map = self.map_vocab()
+        
+
+
+        encoding = cli_args.embedding
+
+        # Only build vocab if training, else use training vocab for validation/testing
+        if external_vocab is not None:
+            # Validation / Testing
+            sentences = self.tokenize()
+            vocab_map = external_vocab
+        else:
+            # Normal training flow
+            vocab_cap = 2000 if encoding == 'sparse' else None
+            sentences, vocab_map = self.map_vocab(vocab_cap=vocab_cap)
+
 
         # ---------------- create vocab embeddings ------------ # 
-        if encoding=="glove":
+        if encoding == 'sparse':
+            
+            n_instances = len(sentences)
+            v_size = len(vocab_map)
+            
+            print(f'FEATURIZING: encoding: sparse (multi-hot)')
+            # Create a matrix of zeros: (number of sentences x vocabulary size)
+            features = torch.zeros(n_instances, v_size)
+
+            for i, sentence in enumerate(sentences):
+                for word in sentence:
+                    if word in vocab_map:
+                        # If word in top N words, use index,
+                        # Else mark the index of the word as 1 <UNK>
+                        idx = vocab_map.get(word, 1)
+                        features[i, idx] = 1.0
+            return features
+
+
+    
+        elif encoding=="glove":
             print(f'FEATURIZING: encoding: glove')
             
             # initialize vocab embedding as random distribution 
@@ -169,47 +220,57 @@ class FeatureExtractor():
             for i in range(len(sentences)): 
                 word_indices = []
                 for word in sentences[i]:
-                    word_indices.append(vocab_map[word])
+                    if vocab_map.get(sentences[i][j]) is not None:
+                            word_indices.append(vocab_map.get(sentences[i][j]))
+                    else:
+                        word_indices.append(vocab_map.get("<UNK>"))
+                        
                 sentence_weights = vocab_embedding(torch.tensor(
                                             word_indices, dtype=torch.long))
                 
                 # flatten each sentence by summing columns to 1d vector (1 x 300)
                 features[i] = self.flatten_vectors(sentence_weights)
         
-        # TODO: implement concatenated word vectors instead of flattened vector
+        # concatenated word vectors instead of flattened vector
         elif sentence_type == "concat":
             print(f'FEATURIZING: sentence_type: concat')
             
             # cap max sentence,
             # otherwise memory issues
-            MAX_W = 50 
+            max_w = cli_args.max_length 
 
-            # initialize input features (s x 300*MAX_W)
-            features = torch.randn(len(sentences), 300*MAX_W)
+            # initialize input features (s x 300*max_w)
+            features = torch.randn(len(sentences), 300*max_w)
 
             # create sententence embedding (1 x 300*max(w))
             for i in range(len(sentences)): 
                 
                 # populate sentence indices   
                 word_indices = []
-                # only populate first MAX_W indices
-                if len(sentences[i]) <= MAX_W:
+                # only populate first max_w indices
+                if len(sentences[i]) <= max_w:
                     # append real word indices
                     for j in range(len(sentences[i])):
-                        word_indices.append(vocab_map[sentences[i][j]])
+                        if vocab_map.get(sentences[i][j]) is not None:
+                            word_indices.append(vocab_map.get(sentences[i][j]))
+                        else:
+                            word_indices.append(vocab_map.get("<UNK>"))
                     
                     # pad the rest of the sentence with vocab_map["<PAD>"]
-                    rem_words = MAX_W - len(word_indices)
+                    rem_words = max_w - len(word_indices)
                     padding = [vocab_map["<PAD>"] for k in range(rem_words)]
                     word_indices.extend(padding)
-                else: # sentence over MAX_W tokens, append only 1st MAX_W tokens
-                    for j in range(MAX_W):
-                        word_indices.append(vocab_map[sentences[i][j]])
+                else: # sentence over max_w tokens, append only 1st max_w tokens
+                    for j in range(max_w):
+                        if vocab_map.get(sentences[i][j]) is not None:
+                            word_indices.append(vocab_map.get(sentences[i][j]))
+                        else:
+                            word_indices.append(vocab_map.get("<UNK>"))
 
-                # make sure exactly MAX_W word indices in sentence
-                if len(word_indices) != MAX_W:
+                # make sure exactly max_w word indices in sentence
+                if len(word_indices) != max_w:
                     print(f'padded sentence length: {len(word_indices)}')
-                    print(f'but it should be:       {MAX_W}')
+                    print(f'but it should be:       {max_w}')
                     raise ValueError(f'sentence {i} is not correctly padded!')
                 
                 # add sentence to features tensor
@@ -224,32 +285,33 @@ class FeatureExtractor():
 
       
 
-        # --------------------
+    # --------------------
 
+    # TODO: DELETE once new random word embedding code works
+    
+    # # random word embedding
 
-        # random word embedding
+    # # --- Parameters ---
+    # VOCAB_SIZE = vocab_len  # The total number of unique words in your vocabulary
+    # EMBEDDING_DIM = 300 # The desired size (dimension) of each word vector
 
-        # --- Parameters ---
-        VOCAB_SIZE = vocab_len  # The total number of unique words in your vocabulary
-        EMBEDDING_DIM = 300 # The desired size (dimension) of each word vector
+    # # --- Initialization ---
+    # # This single line creates a weight matrix (the embedding layer)
+    # # and initializes it with small random numbers (usually uniform distribution)
+    # embedding_layer = nn.Embedding(
+    #     num_embeddings=VOCAB_SIZE, 
+    #     embedding_dim=EMBEDDING_DIM
+    #     )
 
-        # --- Initialization ---
-        # This single line creates a weight matrix (the embedding layer)
-        # and initializes it with small random numbers (usually uniform distribution)
-        embedding_layer = nn.Embedding(
-            num_embeddings=VOCAB_SIZE, 
-            embedding_dim=EMBEDDING_DIM
-            )
+    # input_indices : torch.Tensor # vocab token IDs for sentences e.g. [10, 52, 74...]
 
-        input_indices : torch.Tensor # vocab token IDs for sentences e.g. [10, 52, 74...]
-
-        # Perform the lookup
-        embedded_input = embedding_layer(input_indices)
-        # Flatten into (1 x 300) sentence vector
-        flattened_input = flatten_vectors(embedded_input)
-        print(f"Embedded input shape: {embedded_input.shape}")
+    # # Perform the lookup
+    # embedded_input = embedding_layer(input_indices)
+    # # Flatten into (1 x 300) sentence vector
+    # flattened_input = flatten_vectors(embedded_input)
+    # print(f"Embedded input shape: {embedded_input.shape}")
         
-        NotImplemented
+
     
          
 
@@ -268,20 +330,22 @@ class FeatureExtractor():
 
 
 
+
 class PDTBDataset(Dataset):
     """Dataset class for the PDTB dataset"""
-    def __init__(self, set="train", sentence_type="concat", encoding="glove"):
+    def __init__(self, cli_args, set="train", sentence_type="concat"):
         super().__init__()
         self.sentences : list[str] = []
         self.senses : list[str] = []
         self.features : torch.Tensor
+        
         path = ""
         if set == "train":
-            path = "pdtb/train.json"
+            path = cli_args.train_path
         elif set == "validate":
-            path = "pdtb/dev.json"
+            path = cli_args.val_path
         elif set == "test":
-            path = "pdtb/test.json"
+            path = cli_args.test_path
         else:
             raise FileNotFoundError("No such file found!")
         
@@ -291,20 +355,27 @@ class PDTBDataset(Dataset):
                 arg1 = line['Arg1']['RawText'].lower()
                 conn = line['Connective']['RawText'].lower()
                 arg2 = line['Arg2']['RawText'].lower()
-                sense = line['Sense']
+                full_sense = line['Sense'][0]
+                leveled_sense = to_level(full_sense, level=1)
                 self.sentences.append(''.join([arg1, conn, arg2]))
-                self.senses.append(sense[0])
+                self.senses.append(leveled_sense)
         
 
-    def featurize(self, encoding='glove', sentence_type="concat"):
+    def featurize(self, cli_args, sentence_type="concat", external_vocab=None):
         extractor = FeatureExtractor(self.sentences, self.senses)
-        features = extractor.featurize(encoding=encoding, 
-                                    sentence_type=sentence_type)
+        
+        features = extractor.featurize(cli_args, 
+                                       sentence_type=sentence_type,
+                                       external_vocab=external_vocab)
+        
+        # save vocab map
+        _, self.vocab_map = extractor.map_vocab(vocab_cap=(2000 if cli_args.embedding == 'sparse' else None))
+
         self.features = features
         return features
 
     def __len__(self):
-        NotImplemented
+        return len(self.sentences)
 
     def __getitem__(self, idx):
-        NotImplemented
+        return self.sentences[idx]
